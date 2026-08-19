@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "generatedAt": "2026-08-19T15:38:50.547Z",
+  "api": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "ui": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "negative": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "skipped": 0
+  }
+}
