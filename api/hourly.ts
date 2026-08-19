@@ -1,3 +1,5 @@
-import { createWeatherAiHandler } from '../server/createWeatherAiHandler';
+import { proxyWeather } from './_weatherProxy';
 
-export default createWeatherAiHandler('/v1/hourly');
+export function GET(request: Request) {
+  return proxyWeather(request, '/v1/hourly');
+}
