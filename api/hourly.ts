@@ -1,3 +1,7 @@
 import { createWeatherAiHandler } from '../server/createWeatherAiHandler';
 
-export default createWeatherAiHandler('/v1/hourly');
+const handler = createWeatherAiHandler('/v1/hourly');
+
+export default {
+  fetch: handler
+};
