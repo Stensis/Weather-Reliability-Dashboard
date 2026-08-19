@@ -10,40 +10,64 @@ const FORWARDED_HEADERS = [
   'x-city'
 ] as const;
 
-type WeatherHandler = (request: Request) => Promise<Response>;
+type ServerRequest = {
+  method?: string;
+  url?: string;
+};
 
-export function createWeatherAiHandler(endpoint: string): WeatherHandler {
-  return async (request: Request): Promise<Response> => {
+type ServerResponse = {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(body?: string): void;
+};
+
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  payload: Record<string, unknown>
+) {
+  response.statusCode = status;
+  response.setHeader('content-type', 'application/json; charset=utf-8');
+  response.setHeader('cache-control', 'no-store');
+  response.end(JSON.stringify(payload));
+}
+
+export function createWeatherAiHandler(endpoint: string) {
+  return async function handler(
+    request: ServerRequest,
+    response: ServerResponse
+  ): Promise<void> {
     try {
-      if (request.method !== 'GET') {
-        return Response.json(
-          { error: 'Method not allowed' },
-          {
-            status: 405,
-            headers: { Allow: 'GET' }
-          }
-        );
+      if (request.method && request.method !== 'GET') {
+        response.setHeader('allow', 'GET');
+        sendJson(response, 405, { error: 'Method not allowed' });
+        return;
       }
 
       const apiKey = process.env.WEATHER_AI_API_KEY;
 
       if (!apiKey) {
         console.error('WEATHER_AI_API_KEY is missing in the Vercel runtime.');
-        return Response.json(
-          { error: 'Weather service is not configured.' },
-          { status: 503 }
-        );
+        sendJson(response, 503, {
+          error: 'Weather service is not configured.'
+        });
+        return;
       }
 
       const baseUrl = process.env.WEATHER_AI_BASE_URL || DEFAULT_BASE_URL;
-      const incomingUrl = new URL(request.url);
       const upstreamUrl = new URL(endpoint, baseUrl);
 
-      incomingUrl.searchParams.forEach((value, key) => {
-        upstreamUrl.searchParams.set(key, value);
-      });
+      const rawUrl = request.url || '';
+      const queryIndex = rawUrl.indexOf('?');
 
-      const startedAt = performance.now();
+      if (queryIndex >= 0) {
+        const incomingParams = new URLSearchParams(rawUrl.slice(queryIndex + 1));
+        incomingParams.forEach((value, key) => {
+          upstreamUrl.searchParams.set(key, value);
+        });
+      }
+
+      const startedAt = Date.now();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12_000);
 
@@ -54,56 +78,44 @@ export function createWeatherAiHandler(endpoint: string): WeatherHandler {
             Authorization: `Bearer ${apiKey}`,
             Accept: 'application/json'
           },
-          signal: controller.signal,
-          cache: 'no-store'
+          signal: controller.signal
         });
 
         const body = await upstream.text();
-        const headers = new Headers();
+
+        response.statusCode = upstream.status;
 
         for (const header of FORWARDED_HEADERS) {
           const value = upstream.headers.get(header);
-          if (value) headers.set(header, value);
+          if (value) response.setHeader(header, value);
         }
 
-        if (!headers.has('content-type')) {
-          headers.set('content-type', 'application/json; charset=utf-8');
+        if (!upstream.headers.get('content-type')) {
+          response.setHeader('content-type', 'application/json; charset=utf-8');
         }
 
-        headers.set(
+        response.setHeader(
           'x-proxy-latency-ms',
-          String(Math.round(performance.now() - startedAt))
+          String(Date.now() - startedAt)
         );
-        headers.set('cache-control', 'no-store');
-
-        return new Response(body, {
-          status: upstream.status,
-          headers
-        });
+        response.setHeader('cache-control', 'no-store');
+        response.end(body);
       } catch (error) {
-        const isTimeout =
-          error instanceof Error && error.name === 'AbortError';
+        const isTimeout = error instanceof Error && error.name === 'AbortError';
 
         console.error('WeatherAI upstream request failed:', error);
 
-        return Response.json(
-          {
-            error: isTimeout
-              ? 'WeatherAI request timed out.'
-              : 'Unable to reach WeatherAI.'
-          },
-          { status: isTimeout ? 504 : 502 }
-        );
+        sendJson(response, isTimeout ? 504 : 502, {
+          error: isTimeout
+            ? 'WeatherAI request timed out.'
+            : 'Unable to reach WeatherAI.'
+        });
       } finally {
         clearTimeout(timeoutId);
       }
     } catch (error) {
-      console.error('WeatherAI function failed before upstream request:', error);
-
-      return Response.json(
-        { error: 'Unexpected server error.' },
-        { status: 500 }
-      );
+      console.error('WeatherAI function failed:', error);
+      sendJson(response, 500, { error: 'Unexpected server error.' });
     }
   };
 }
