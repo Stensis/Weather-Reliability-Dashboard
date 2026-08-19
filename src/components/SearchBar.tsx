@@ -22,6 +22,13 @@ export function SearchBar({
 
   useEffect(() => onSearchMeta(meta), [meta, onSearchMeta]);
   useEffect(() => {
+  if (!selected) {
+    return;
+  }
+
+  setQuery(locationLabel(selected));
+}, [selected]);
+  useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
       if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
     };

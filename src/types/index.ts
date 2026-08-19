@@ -30,6 +30,7 @@ export type ApiResult<T = unknown> = {
 export type HourlyPoint = {
   time: string;
   temperature?: number;
+  feelsLike?: number;
   humidity?: number;
   windSpeed?: number;
   rainProbability?: number;

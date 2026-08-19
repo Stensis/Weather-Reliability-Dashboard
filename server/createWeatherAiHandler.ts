@@ -1,14 +1,9 @@
+
 type ServerRequest = {
   url?: string;
   query?: Record<string, string | string[] | undefined>;
 };
 
-type ServerResponse = {
-  status: (code: number) => ServerResponse;
-  setHeader: (name: string, value: string) => void;
-  send: (body: string) => void;
-  json: (body: unknown) => void;
-};
 
 const DEFAULT_BASE_URL = 'https://api.weather-ai.co';
 const FORWARDED_HEADERS = [
@@ -33,39 +28,96 @@ function getQueryString(req: ServerRequest) {
 }
 
 export function createWeatherAiHandler(endpoint: string) {
-  return async function handler(req: ServerRequest, res: ServerResponse) {
-    const apiKey = process.env.WEATHER_AI_API_KEY;
-    if (!apiKey || !apiKey.startsWith('wai_')) {
-      return res.status(503).json({
-        error: 'WEATHER_AI_API_KEY is not configured on the deployment.'
-      });
-    }
-
-    const baseUrl = process.env.WEATHER_AI_BASE_URL || DEFAULT_BASE_URL;
-    const startedAt = performance.now();
-
+  return async function handler(request: Request): Promise<Response> {
     try {
-      const upstream = await fetch(`${baseUrl}${endpoint}${getQueryString(req)}`, {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          Accept: 'application/json'
-        },
-        signal: AbortSignal.timeout(12_000)
+      const apiKey = process.env.WEATHER_AI_API_KEY;
+
+      if (!apiKey) {
+        return Response.json(
+          {
+            error: 'WEATHER_AI_API_KEY is not configured on the deployment.'
+          },
+          {
+            status: 503
+          }
+        );
+      }
+
+      const baseUrl =
+        process.env.WEATHER_AI_BASE_URL || DEFAULT_BASE_URL;
+
+      const incomingUrl = new URL(request.url);
+      const upstreamUrl = new URL(endpoint, baseUrl);
+
+      incomingUrl.searchParams.forEach((value, key) => {
+        upstreamUrl.searchParams.set(key, value);
       });
+
+      const startedAt = Date.now();
+
+      const controller = new AbortController();
+
+      const timeout = setTimeout(() => {
+        controller.abort();
+      }, 12_000);
+
+      let upstream: Response;
+
+      try {
+        upstream = await fetch(upstreamUrl, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            Accept: 'application/json'
+          },
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
       const body = await upstream.text();
+
+      const headers = new Headers();
+
       for (const header of FORWARDED_HEADERS) {
         const value = upstream.headers.get(header);
-        if (value) res.setHeader(header, value);
+
+        if (value) {
+          headers.set(header, value);
+        }
       }
-      res.setHeader('x-proxy-latency-ms', String(Math.round(performance.now() - startedAt)));
-      res.setHeader('cache-control', 'no-store');
-      return res.status(upstream.status).send(body);
-    } catch (error) {
-      return res.status(502).json({
-        error: 'Unable to reach WeatherAI.',
-        detail: error instanceof Error ? error.message : 'Unknown upstream error'
+
+      if (!headers.has('content-type')) {
+        headers.set('content-type', 'application/json');
+      }
+
+      headers.set(
+        'x-proxy-latency-ms',
+        String(Date.now() - startedAt)
+      );
+
+      headers.set('cache-control', 'no-store');
+
+      return new Response(body, {
+        status: upstream.status,
+        headers
       });
+    } catch (error) {
+      console.error('WeatherAI proxy failed:', error);
+
+      return Response.json(
+        {
+          error: 'Unable to reach WeatherAI.',
+          detail:
+            error instanceof Error
+              ? error.message
+              : 'Unknown upstream error'
+        },
+        {
+          status: 502
+        }
+      );
     }
   };
 }
